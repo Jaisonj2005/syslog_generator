@@ -1,0 +1,153 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import socket
+import datetime
+import platform
+
+# Standard Syslog Protocol Mappings (RFC 3164)
+FACILITIES = {
+    "Kernel (0)": 0, "User-Level (1)": 1, "System Daemon (3)": 3, 
+    "Security/Auth (4)": 4, "Syslog Internal (5)": 5, 
+    "Network/Local0 (16)": 16, "Network/Local7 (23)": 23
+}
+
+SEVERITIES = {
+    "Emergency (0)": 0, "Alert (1)": 1, "Critical (2)": 2, 
+    "Error (3)": 3, "Warning (4)": 4, "Notice (5)": 5, 
+    "Info (6)": 6, "Debug (7)": 7
+}
+
+def load_preset(preset_type):
+    entry_message.delete(0, tk.END)
+    if preset_type == "Cisco Link Down":
+        combo_fac.set("Network/Local7 (23)")
+        combo_sev.set("Error (3)")
+        entry_message.insert(0, "%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down")
+    elif preset_type == "SSH Brute Force":
+        combo_fac.set("Security/Auth (4)")
+        combo_sev.set("Warning (4)")
+        entry_message.insert(0, "sshd[1234]: Failed password for root from 192.168.1.100 port 54321 ssh2")
+    elif preset_type == "Firewall Drop":
+        combo_fac.set("Network/Local0 (16)")
+        combo_sev.set("Notice (5)")
+        entry_message.insert(0, "%ASA-4-106023: Deny tcp src outside:192.168.1.50/4444 dst inside:10.0.0.5/80 by access-group")
+
+def send_syslog():
+    ip = entry_ip.get().strip()
+    port = entry_port.get().strip()
+    message = entry_message.get().strip()
+    
+    if not ip or not port or not message:
+        messagebox.showerror("Input Error", "Please fill in all target and message fields.")
+        return
+        
+    try:
+        port = int(port)
+        # Calculate PRIVAL (Facility * 8 + Severity)
+        fac_val = FACILITIES[combo_fac.get()]
+        sev_val = SEVERITIES[combo_sev.get()]
+        prival = (fac_val * 8) + sev_val
+        
+        # Construct standard Syslog header
+        timestamp = datetime.datetime.now().strftime("%b %d %H:%M:%S")
+        hostname = platform.node()
+        
+        # Final Syslog Packet: <PRIVAL>TIMESTAMP HOSTNAME MESSAGE
+        syslog_packet = f"<{prival}>{timestamp} {hostname} {message}"
+        
+        # Send via UDP Datagram
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.sendto(syslog_packet.encode('utf-8'), (ip, port))
+        sock.close()
+        
+        # Log to UI
+        text_log.config(state=tk.NORMAL)
+        text_log.insert(tk.END, f"[*] Sent to {ip}:{port}\n")
+        text_log.insert(tk.END, f"[>] {syslog_packet}\n\n", "success")
+        text_log.see(tk.END)
+        text_log.config(state=tk.DISABLED)
+        
+        lbl_status.config(text="Packet Sent Successfully", fg="#27ae60")
+        
+    except ValueError:
+        messagebox.showerror("Port Error", "Port must be a valid integer (default 514).")
+    except Exception as e:
+        messagebox.showerror("Network Error", f"Failed to send packet: {str(e)}")
+        lbl_status.config(text="Transmission Failed", fg="#c0392b")
+
+# --- Tkinter GUI Layout ---
+root = tk.Tk()
+root.title("SOC Toolkit - Syslog Alert Generator")
+root.geometry("600x550")
+root.resizable(False, False)
+
+frame = ttk.Frame(root, padding="15")
+frame.pack(fill=tk.BOTH, expand=True)
+
+lbl_title = tk.Label(frame, text="Custom Syslog Packet Generator", font=("Helvetica", 13, "bold"))
+lbl_title.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 15))
+
+# Target Configuration
+frame_target = tk.LabelFrame(frame, text=" SIEM Target ", font=("Helvetica", 9, "bold"), padx=10, pady=10)
+frame_target.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 15))
+
+tk.Label(frame_target, text="Target IP:").grid(row=0, column=0, sticky="w", pady=5)
+entry_ip = ttk.Entry(frame_target, width=18)
+entry_ip.grid(row=0, column=1, padx=(5, 20), pady=5)
+entry_ip.insert(0, "127.0.0.1")
+
+tk.Label(frame_target, text="UDP Port:").grid(row=0, column=2, sticky="w", pady=5)
+entry_port = ttk.Entry(frame_target, width=8)
+entry_port.grid(row=0, column=3, padx=5, pady=5)
+entry_port.insert(0, "514")
+
+# Payload Configuration
+frame_payload = tk.LabelFrame(frame, text=" Log Payload ", font=("Helvetica", 9, "bold"), padx=10, pady=10)
+frame_payload.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 15))
+
+tk.Label(frame_payload, text="Facility:").grid(row=0, column=0, sticky="w", pady=5)
+combo_fac = ttk.Combobox(frame_payload, values=list(FACILITIES.keys()), state="readonly", width=22)
+combo_fac.grid(row=0, column=1, padx=(5, 15), pady=5)
+combo_fac.current(6)
+
+tk.Label(frame_payload, text="Severity:").grid(row=0, column=2, sticky="w", pady=5)
+combo_sev = ttk.Combobox(frame_payload, values=list(SEVERITIES.keys()), state="readonly", width=15)
+combo_sev.grid(row=0, column=3, padx=5, pady=5)
+combo_sev.current(3)
+
+tk.Label(frame_payload, text="Presets:").grid(row=1, column=0, sticky="w", pady=10)
+btn_preset1 = tk.Button(frame_payload, text="Cisco Link Down", command=lambda: load_preset("Cisco Link Down"), font=("Helvetica", 8))
+btn_preset1.grid(row=1, column=1, sticky="w", padx=5)
+
+btn_preset2 = tk.Button(frame_payload, text="SSH Failed", command=lambda: load_preset("SSH Brute Force"), font=("Helvetica", 8))
+btn_preset2.grid(row=1, column=2, sticky="w", padx=5)
+
+btn_preset3 = tk.Button(frame_payload, text="FW Drop", command=lambda: load_preset("Firewall Drop"), font=("Helvetica", 8))
+btn_preset3.grid(row=1, column=3, sticky="w", padx=5)
+
+tk.Label(frame_payload, text="Message:").grid(row=2, column=0, sticky="w", pady=(5,0))
+entry_message = ttk.Entry(frame_payload, width=60, font=("Consolas", 9))
+entry_message.grid(row=2, column=1, columnspan=3, sticky="w", padx=5, pady=(5,0))
+
+# Controls
+btn_send = tk.Button(frame, text="Transmit Syslog UDP", command=send_syslog, bg="#e67e22", fg="white", font=("Helvetica", 9, "bold"), width=20)
+btn_send.grid(row=3, column=0, sticky="w", pady=(5, 10))
+
+lbl_status = tk.Label(frame, text="Ready", font=("Helvetica", 9, "italic"), fg="#7f8c8d")
+lbl_status.grid(row=3, column=1, sticky="e", pady=(5, 10))
+
+# Output Console
+text_frame = tk.Frame(frame)
+text_frame.grid(row=4, column=0, columnspan=2, sticky="nsew")
+
+scrollbar = tk.Scrollbar(text_frame)
+scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+text_log = tk.Text(text_frame, font=("Consolas", 9), bg="#1e1e1e", fg="#ecf0f1", yscrollcommand=scrollbar.set, height=10)
+text_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+text_log.config(state=tk.DISABLED)
+text_log.tag_config("success", foreground="#2ecc71")
+
+scrollbar.config(command=text_log.yview)
+
+root.mainloop()
